@@ -8,6 +8,7 @@ Created on Fri May 14 16:06:22 2021
 Adapted from demo_pipeline.py  @authors: @agiovann and @epnev
 
 """
+#import everything 
 import cv2
 import glob
 import logging
@@ -36,27 +37,31 @@ from caiman.source_extraction.cnmf import cnmf as cnmf
 from caiman.source_extraction.cnmf import params as params
 from caiman.utils.utils import download_demo
 from caiman.summary_images import local_correlations_movie_offline
-#%%
+
+#%% start by loading basic confiugurations
 logging.basicConfig(format=
                           "%(relativeCreated)12d [%(filename)s:%(funcName)20s():%(lineno)s] [%(process)d] %(message)s",
                     # filename="/tmp/caiman.log",
                     level=logging.WARNING)
-#%%
+
+#%% os.getcwd() to figure out where you are and os.chdir() to your directory with the movies
 fnames = ['test.tif']  # filename to be processed
-#%%
-display_movie = True
+#%%Check your movie first
+display_movie = True        # False if you dont want to see it. Press q to exit
 if display_movie:
-    m_orig = cm.load_movie_chain(fnames)
+    m_orig = cm.load_movie_chain(fnames)    #this parameters work for a 256X256 for the 2p 
     ds_ratio = 0.2
     m_orig.resize(1, 1, ds_ratio).play(
-        q_max=85, fr=3, magnification=2)
+        q_max=85, fr=3, magnification=2)    # pick your fr and change your q_max appropiatetly
+    
+#%% Start building the parameters (I will build all parameters for future uses like CNMF not only mc)
     #%% build parameters
     # dataset dependent parameters
 fr = 3                             # imaging rate in frames per second
 decay_time = 0.4                    # length of a typical transient in seconds
 
 # parameters for source extraction and deconvolution
-p = 1                       # order of the autoregressive system (p=0 deconvolution off)
+p = 0                       # order of the autoregressive system (p=0 deconvolution off)
 gnb = 2                     # number of global background components
 merge_thr = 0.95            # merging threshold, max correlation allowed
 rf = 15                     # half-size of the patches in pixels. e.g., if rf=25, patches are 50x50
@@ -64,8 +69,8 @@ stride_cnmf = 4             # amount of overlap between the patches in pixels
 K = 4                       # number of components per patch
 gSig = [4, 4]               # expected half size of neurons in pixels
 method_init = 'greedy_roi'  # greedy_roi for 2p data
-ssub = 1                    # spatial subsampling during initialization
-tsub = 1                    # temporal subsampling during intialization
+ssub = 2                   # spatial subsampling during initialization
+tsub = 1                   # temporal subsampling during intialization
 
 # motion correction parameters
 strides = (8, 8)          # start a new patch for pw-rigid motion correction every x pixels
@@ -105,34 +110,31 @@ opts_dict = {'fnames': fnames,
             'min_cnn_thr': cnn_thr,
             'cnn_lowest': cnn_lowest}
 
-opts = params.CNMFParams(params_dict=opts_dict)
-#%% start a cluster for parallel processing (if a cluster already exists it will be closed and a new session will be opened)
+opts = params.CNMFParams(params_dict=opts_dict) #make sure you make a dictionary with your parameters
+
+#%% start the cluster (if a cluster already exists terminate it)
 if 'dview' in locals():
     cm.stop_server(dview=dview)
-c, dview, n_processes = cm.cluster.setup_cluster(
-    backend='local', n_processes=None, single_thread=False)
+    c, dview, n_processes= cm.cluster.setup_cluster(
+        backend='local', n_processes=None, single_thread=False)
+    
 #%%# first we create a motion correction object with the parameters specified
+# first we create a motion correction object with the parameters specified
 mc = MotionCorrect(fnames, dview=dview, **opts.get_group('motion'))
 # note that the file is not loaded in memory
-#%%
-
-
 #%% Run piecewise-rigid motion correction using NoRMCorre
-%%capture
+# correct for rigid motion correction and save the file (in memory mapped form)
 mc.motion_correct(save_movie=True)
 m_els = cm.load(mc.fname_tot_els)
 border_to_0 = 0 if mc.border_nan is 'copy' else mc.border_to_0 
-    # maximum shift to be used for trimming against NaNs
-    #%%
-    #%% compare with original movie
-display_movie = True
+#%% compare with original movie
+display_movie = False
 if display_movie:
     m_orig = cm.load_movie_chain(fnames)
     ds_ratio = 0.2
     cm.concatenate([m_orig.resize(1, 1, ds_ratio) - mc.min_mov*mc.nonneg_movie,
                     m_els.resize(1, 1, ds_ratio)], 
-                   axis=2).play(fr=1, gain=50, magnification=2, offset=0)  # press q to exit the higher the gain values the lighter the image)
-    #%%
+                   axis=2).play(fr=3, gain=65, magnification=2, offset=0)  # press q to exit
     #%% MEMORY MAPPING
 # memory map the file in order 'C'
 fname_new = cm.save_memmap(mc.mmap_file, base_name='memmap_', order='C',
@@ -143,13 +145,16 @@ Yr, dims, T = cm.load_memmap(fname_new)
 images = np.reshape(Yr.T, [T] + list(dims), order='F') 
     #load frames in python format (T x X x Y)
     
-    #%% to save the movie upload the file you just created and then save it as a .tiff
-    motion_correxted_movie_new = cm.load('memmap__d1_256_d2_256_d3_1_order_C_frames_82_.mmap') #load the file you just made
+#%% to save the movie upload the file you just created and then save it as a .tiff
+motion_correxted_movie_new = cm.load('memmap__d1_256_d2_256_d3_1_order_C_frames_82_.mmap') #load the file you just made
     
-    motion_correxted_movie_new.save("new_motion_corr.tiff")#file to save
+motion_correxted_movie_new.save("new_motion_corr.tiff")#file to save
     
-#%%
- #restart cluster to clean up memory
-cm.stop_server(dview=dview)
-c, dview, n_processes = cm.cluster.setup_cluster(
-    backend='local', n_processes=None, single_thread=False)
+# %% restart cluster to clean up memory
+    cm.stop_server(dview=dview)
+    c, dview, n_processes = cm.cluster.setup_cluster(
+        backend='local', n_processes=None, single_thread=False)
+#%%END OF MOTION CORRECTION
+print("check in your documents a a file name new_motion_corr.tiff. If it is there you have finsish motion correction")
+
+
